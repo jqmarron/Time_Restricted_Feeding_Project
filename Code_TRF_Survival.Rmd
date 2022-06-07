@@ -1,0 +1,283 @@
+---
+title: "Code_TRF_Survival"
+author: "Jorge Martinez Romero"
+date: "`r format(Sys.time(), '%Y %B %d')`"
+output: html_document
+---
+date: "`r format(Sys.time(), '%Y %B %d')`"
+
+
+## Aim
+
+Compare 5 interventions in mice, same strain and sex.
+
+## Statistical Analysis 
+
+Steps
+1. Check mortality discrepancies in the dataframe (Memy)
+2. Censor sacrificed animals 
+3. Lifespan statistics (Without censored animals)
+4. Survival Analysis: Chi squared and Log-rank test
+5. Survival Analysis: Cox 
+	 5.1 Check Assumptions
+	 5.2 Fit parsimonious model
+6. Compare survival in groups (Multiple hypothesis testing correction) 
+	 6.1 Plots
+7. Predict life expectancy according to the model.
+
+## Results
+
+***
+
+```{r packages, warning=FALSE, message=FALSE, echo=FALSE}
+
+library (survival)
+library (kableExtra)
+library (tidyverse)
+library (survminer) 
+
+knitr::opts_chunk$set(autodep = TRUE) 
+knitr::opts_chunk$set(warning = FALSE) 
+knitr::opts_chunk$set(message = FALSE) 
+knitr::opts_chunk$set(echo = FALSE) 
+knitr::opts_chunk$set(include = FALSE) 
+knitr::opts_chunk$set(cache = FALSE) 
+
+```
+
+
+### Outcome: Lifespan 
+<!-- LE -->
+```{r life_expectancy, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+
+#Import file cleaned and supplied by Memi
+df<-read.csv2('Tables/TRF project_surv_stats.csv',sep = ";")
+dfM<-read.csv2('Tables/TRF_fe_stats.csv',sep = ",")
+dff<-df %>% select(idno, fu_age_wkCORRECTED,StatusCORRECTED)
+dff2<-dfM %>% left_join(dff, by="idno") %>% 
+  relocate(c(fu_age_wkCORRECTED,StatusCORRECTED),.after = fu_age_wk) %>% filter(feeding!="excluded")
+
+dff2$feeding<-as.factor(as.character(dff2$feeding))
+
+
+plot(density(df$fu_age_wkCORRECTED))
+```
+
+
+<!-- results -->
+#### Normality
+ 
+```{r shapi, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+shapiro.test(df$fu_age_wkCORRECTED)
+```
+
+```{r lif, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+library(ggpubr)
+ggqqplot(df$fu_age_wkCORRECTED)
+cat("No Normal, apply non parametric test or semi-parametric Cox for survival analysis")
+```
+
+## Lifespan Statistics (Sacrificed mice excluded)
+
+```{r slam_ss_dist_funct, include=TRUE, warning=FALSE, message=FALSE, echo=FALSE, cache=TRUE, eval=TRUE}
+#remove non natural death
+df_nat<-df[df$StatusCORRECTED=="1",]
+
+# From: Fernandez, Maria (NIH/NIA/IRP) [F] <fernandezme@mail.nih.gov> 
+# Sent: Thursday, April 28, 2022 10:23 AM
+# To: Martinez Romero, Jorge (NIH/NIA/IRP) [F] <jorge.martinezromero@nih.gov>
+# Subject: RE: TRF4 y TRF8
+# 
+# Columna 1: feeding treatment (discriminando todos, i.e., AL, TRF4, TRF8, CR, CRX2).
+# Columna 2: el ID de los animales.
+# Columna 3: solo el numero de los IDs de los animales.
+# Columna 4: la caja a la que pertenece cada animal (reconstruida a partir de uno de los archivos de Surv).
+# Columna 5: la subcaja a la que pertenece cada animal (Tuve que hacer esto porque habia una caja “56A”).
+# Columna 6: los animales que murieron antes de que empezaran los feeding treatments (estado=1) y los que murieron luego de que los feeding treatments habian comenzado (estado=0).
+#Memi
+
+#Bellow the file with diet assignation sent by Maria
+df_5_diets<-read.csv2('Tables/Copy of TRFproject_IDAnimal_3 treatments.csv',sep = ",")
+colnames(df_5_diets)[1]<-"Diet"
+colnames(df_5_diets)[4]<-"Cage"
+
+df_nat_5<-df_nat %>% left_join(df_5_diets, by = c("idno" = "ID")) %>% relocate(c(Diet,Cage),.after = feeding) 
+df_nat_5$Diet[74:79]<-c(rep("CR",3),rep("CRX2",3))
+
+df5<-df %>% left_join(df_5_diets, by = c("idno" = "ID")) %>% relocate(c(Diet,Cage),.after = feeding) 
+
+df5$Diet[91:97]<-c(rep("CR",4),rep("CRX2",4))
+
+Sumar<-as.matrix(aggregate(fu_age_wkCORRECTED ~ Diet, data = df_nat_5, summary))
+#colnames(Sumar)
+nn<-aggregate(fu_age_wkCORRECTED ~ Diet, data = df_nat_5, length)
+
+
+Q90<-function(x){quantile(x, probs = 0.90, na.rm = T)}
+QX90<-aggregate(fu_age_wkCORRECTED ~ Diet, data = df_nat_5, Q90)
+colnames(nn)<-c("Diet","#Mice")
+colnames(Sumar)[2:7]<-c("Min","Q1_25%","Median","Mean","Q3_75%","Max")
+names(QX90)[2]<-"Q_90%"
+
+Stats<-cbind(nn,Sumar[,2:6],QX90[2],Sumar[,7])
+colnames(Stats)[9]<-"Max"
+asNumeric <- function(x) as.numeric(as.character(x))
+Stats<-Stats %>% mutate_if(is.factor, asNumeric)%>% mutate_if(is.numeric, round, digits=0)
+Stats[,1]<-nn[,1]
+#print(Stats)
+kable(Stats, caption = "Table: Lifespan Statistics", row.names = FALSE, align = "c") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE, position = "left") %>%
+  # column_spec(8, border_right = T) %>%
+  footnote(symbol = c("TRF:Time Restricted Feeding; CR: Caloric restriction; AL: Ad libitum")
+           )
+```
+
+## Survival Analysis
+
+### Chi squared and Log-rank test
+
+```{r AA3, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE} 
+
+survdiff(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~Diet,df5)
+
+```
+Conclusion:
+The Chi squared test identifies sig. differences in diets, p<0.05
+
+
+### Log-rank test
+#### To check pairwise comparisons (with multiple testing adjustment)
+
+#### TRF segregated in TRF4 TRF8
+```{r AA4, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+pairwise_survdiff(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~Diet,df5, p.adjust.method = "BH", rho = 0)
+```
+No relevant results, to low n to perform this test
+
+#### TRF merged together
+```{r AA5, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+pairwise_survdiff(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~feeding,df5, p.adjust.method = "BH", rho = 0)
+
+```
+Same.
+
+Conclusion:
+In this case not enough Sample to identify differences by KM-Log rank pairwise analysis.
+
+
+### Cox Proportional Hazard analysis
+
+#### 1) Compare model TRF segregated vs TRF merged
+#### 2) Find the parsimonious Cox model and check assumptions
+```{r Modeling, echo=FALSE, eval=TRUE, include=TRUE, warning=FALSE, include=TRUE}
+#Coxph with time restricted feeding split in 4 hrs TRF4 window and 8 hr window TRF8
+fit_hr<-coxph(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~Diet,method = "breslow",df5)
+#Coxph with time restricted feeding grouped as TRF
+fit_hr_2<-coxph(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~feeding,method = "breslow",df5)
+#Compare the two models
+bb<-anova(fit_hr,fit_hr_2)
+#They are similar pval=0.386. Keep parsimonious one TRF grouped
+print(bb)
+```
+
+When comparing model with TRF clustered -> less loglik.
+There is no difference between model TRF4+TRF8 and TRF. p=0.383 
+No justification to split TRF. Keep the simplest model TRF clustered
+
+#### Check proportional Hazard asumption
+```{r Check proportional hazard ratios, echo=FALSE, eval=TRUE, include=TRUE, warning=FALSE, include=TRUE}
+#Check proportional hazard assumption Schoefeld test
+cox.zph(fit_hr_2)
+plot(cox.zph(fit_hr_2)[1])
+#Correct, they are proportional p>0.05 for model fit_hr_2. 
+```
+Risk seems to be proportional pva>0.05.
+Plot strait. 
+
+### Survival Comparison among diets (n=244, sacrificed censored)
+
+#### Contrast all diet vs AL
+
+```{r A1, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE} 
+
+summary(fit_hr_2)
+```
+Conclusion:
+The Cox analysis finds one diet significantly altering survival risk, CR is protective compared with AL.
+HR=0.55 (0.34-0.88) pval = 0.01*. The risk of dying under CR is less than a half compared to the risk undergoing AL.
+
+
+### Contrast all diet vs CR
+```{r A2, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE} 
+dfrl<-df5
+dfrl$feeding<-factor(dfrl$feeding,levels=c('CR','CRX2','TRF','AL'))
+fit_hr_3<-coxph(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~feeding,dfrl)
+summary(fit_hr_3)
+```
+Conclusion:
+The Cox analysis finds 2 diets significantly altering survival risk, TRF increases risk compared with CR.
+HR=1.75 (1.15-2.65) pval = 0.008 **. The risk of dying under TRF increases 75% (or 1.75 Fold) compared to the risk under CR.
+AL increases risk compared with CR as seen in previous contrast * 
+
+
+### Contrast all diet vs CRX2
+```{r A3, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE} 
+dfrl<-df5
+dfrl$feeding<-factor(dfrl$feeding,levels=c('CRX2','TRF','AL','CR'))
+fit_hr_3<-coxph(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~feeding,dfrl)
+summary(fit_hr_3)
+```
+Conclusion:
+No statistical significant results.
+
+### Contrast all diet vs TRF
+```{r A4, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE} 
+dfrl<-df5
+dfrl$feeding<-factor(dfrl$feeding,levels=c('TRF','AL','CR','CRX2'))
+fit_hr_3<-coxph(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED)~feeding,dfrl)
+summary(fit_hr_3)
+```
+Conclusion:
+Confirmed what we saw in previous contrast.
+
+
+### Plots
+#### Kaplan-Meier curves model (TRF segregated)
+```{r surv_curve5557, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+plofit<-survfit(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED) ~ Diet,df5)
+library(survminer)
+ggsurvplot(plofit, data = df5,
+           legend = "top",
+           legend.title = "Group: ",
+           ylab = "Survivorship\n\n", 
+           xlab = "\n\n Age (Weeks)", xlim = c(60,180),
+           legend.labs = c("AL",
+                           "CR","CRX2","TRF4","TRF8"),
+           palette = c("Black","Dark Green","Blue","Dark Orange","red"),
+           surv.median.line = "hv",
+           ggtheme=theme_minimal())
+```
+
+### Kaplan-Meier curves  parsimonious model (TRF grouped)
+```{r surv_curve5558, warning=FALSE, message=FALSE, echo=FALSE, include=TRUE}
+plofit<-survfit(Surv(time = fu_age_wkCORRECTED, StatusCORRECTED) ~ feeding,df5)
+library(survminer)
+ggsurvplot(plofit, data = df5,
+    legend.title = "Group: ",
+           ylab = "Survivorship\n\n", 
+           xlab = "\n\n Age (Weeks)", xlim = c(60,180),
+           legend.labs = c("AL",
+                           "CR","CRX2","TRF"),
+           surv.median.line = "hv",
+           palette = c("Black","Dark Green","Blue","DArk Orange"),
+           ggtheme=theme_minimal())
+
+```
+
+
+
+
+
+
+
+
