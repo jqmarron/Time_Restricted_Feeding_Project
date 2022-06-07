@@ -1,6 +1,6 @@
 ---
 title: "Code_TRF_Survival"
-author: "Jorge Martinez Romero"
+author: "Jorge Martinez-Romero, Maria Emilia Fernandez"
 date: "`r format(Sys.time(), '%Y %B %d')`"
 output: html_document
 ---
