@@ -1,6 +1,5 @@
 ---
 title: "Code_TRF_Survival"
-author: "Jorge Martinez-Romero, Maria Emilia Fernandez"
 date: "`r format(Sys.time(), '%Y %B %d')`"
 output: html_document
 ---
@@ -9,7 +8,7 @@ date: "`r format(Sys.time(), '%Y %B %d')`"
 
 ## Aim
 
-Compare 5 interventions in mice, same strain and sex.
+Compare Survival among 5 interventions in mice, same strain and sex.
 
 ## Statistical Analysis 
 
@@ -23,7 +22,7 @@ Steps
 	 5.2 Fit parsimonious model
 6. Compare survival in groups (Multiple hypothesis testing correction) 
 	 6.1 Plots
-7. Predict life expectancy according to the model.
+7. Compare maximum life expectancy according Wang-Allison 2004.
 
 ## Results
 
@@ -132,6 +131,9 @@ kable(Stats, caption = "Table: Lifespan Statistics", row.names = FALSE, align = 
            )
 ```
 
+
+
+
 ## Survival Analysis
 
 ### Chi squared and Log-rank test
@@ -204,7 +206,7 @@ summary(fit_hr_2)
 ```
 Conclusion:
 The Cox analysis finds one diet significantly altering survival risk, CR is protective compared with AL.
-HR=0.55 (0.34-0.88) pval = 0.01*. The risk of dying under CR is less than a half compared to the risk undergoing AL.
+HR=0.56 (0.35-0.90) pval = 0.01*. The risk of dying under CR is less than a half compared to the risk undergoing AL.
 
 
 ### Contrast all diet vs CR
@@ -272,6 +274,77 @@ ggsurvplot(plofit, data = df5,
            palette = c("Black","Dark Green","Blue","DArk Orange"),
            ggtheme=theme_minimal())
 
+```
+
+
+###  Maximun lifespan comparison (Wang-Allison 2004 paper)
+
+#### Source
+"Statistical methods for testing effects on maximum lifespan” Wang-Allison 2004. 
+It is a variation of a "simple significance test for quantile regression". 
+David T. Redden1 and David B. Allison
+
+It couples quantile regression with Bonschoo Test Instead of logistic regression.
+Alternatively 'An exact unconditional test based on the observed difference 
+divided by its estimated standard error under the null hypothesis 
+(score statistic)' can be used.
+
+4 Steps:
+
+(1) Estimate the predicted quantile of the outcome distribution (Y) using a quantile regression model (Q0) that includes c covariates . Note if c=0, then the predicted quantile is simply the unconditional sample quantile of the marginal distribution of Y. We use Percentile P90
+
+(2) Create an indicator variable (I) classifying observations within the data set as falling above (I=1) or below (I=0) the predicted quantile.
+
+(3) Using the indicator variable (I), build 2x2 contingency with frequencies. 
+
+(4) Utilizing this fact, test the significance of the covariate, diet group in this case.
+Compare pairwise diets using Bonschoo's test (Recomended by Allison).
+
+
+```{r}
+library(quantreg)
+#Combinatory
+CC<-combn(c("AL","CR","CRX2","TRF4","TRF8"),2)
+tableAllison<-data.frame(Comparisson =rep(0,10),
+                         P90th_lifespan_both = rep(0,10),
+                         Mice_above_Diet1 = rep(0,10),
+                         Mice_bellow_Diet1 = rep(0,10),
+                         Mice_above_Diet2 = rep(0,10),
+                         Mice_bellow_Diet2 = rep(0,10),
+                         Prop_Diet1=rep(0,10),
+                         Prop_Diet2=rep(0,10),
+                         pvalue=rep(0,10),
+                         FDR=rep(0,10))
+tableAllison
+```
+
+```{r, include=TRUE}
+library(exact2x2)
+i<-1
+for (i in 1:10){
+  dfset<-df_nat_5%>% filter(Diet==CC[1,i]| Diet==CC[2,i])
+  df1<-dfset%>% filter(Diet==CC[1,i])
+  df2<-dfset%>% filter(Diet==CC[2,i])
+  AAA<-rq(fu_age_wkCORRECTED ~ 1, tau=0.90, data = dfset)
+  threshold<-AAA$coefficients[1]
+  tableAllison[i,1]<-paste0(CC[1,i],"vs", CC[2,i],sep="")
+  tableAllison[i,2]<- threshold
+  tableAllison[i,3]<-table(df1$fu_age_wkCORRECTED>=threshold)[2]
+  tableAllison[i,4]<-table(df1$fu_age_wkCORRECTED>=threshold)[1]
+  tableAllison[i,5]<-table(df2$fu_age_wkCORRECTED>=threshold)[2]
+  tableAllison[i,6]<-table(df2$fu_age_wkCORRECTED>=threshold)[1]
+  tableAllison[i,7]<-round(tableAllison[i,3]/dim(df1)[1],digit=2)
+  tableAllison[i,8]<-round(tableAllison[i,5]/dim(df2)[1],digit=2)
+  A1<-ifelse(is.na(tableAllison[i,3]),0.01,tableAllison[i,3])
+  A2<-ifelse(is.na(tableAllison[i,5]),0.01,tableAllison[i,5])
+  xxx<-boschloo(A1,dim(df1)[1],A2,dim(df2)[1])
+  tableAllison[i,9]<-round(xxx$p.value,digit=4)
+  i<-i+1
+}
+tableAllison[is.na(tableAllison)] = 0
+tableAllison$FDR<-round(p.adjust(tableAllison$pvalue, method = 'BH'),digit=4)
+write.csv(tableAllison,"Maximun_lifespan_comparisson.csv")
+tableAllison
 ```
 
 
