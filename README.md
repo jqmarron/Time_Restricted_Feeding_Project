@@ -1,7 +1,7 @@
 <h1> Prolonged fasting times reap greater geroprotective
 effects when combined with caloric restriction in
 adult female mice </h1>
-<h2> Published on Cell Metabolism </h2>
+<h2> Published in Cell Metabolism </h2>
 Translational Gerontology Branch. National Institute on Aging. NIH
 <h3> Abstract </h3>
 
